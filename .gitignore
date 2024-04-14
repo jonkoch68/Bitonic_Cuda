@@ -1,0 +1,10 @@
+*.tlog
+*.txt
+*.deps
+*.log
+*.cache
+*.recipe 
+*.obj 
+*.pdb 
+*.ilk
+*.lastbuildstate
