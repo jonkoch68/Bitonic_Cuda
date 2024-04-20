@@ -32,7 +32,7 @@ __device__ void cudaSwap(int *a, int *b)
 	*b = temp;
 }
 
-__global__ void SortKernel(int *array, int size, int originalSize)
+__global__ void SortKernel(int *array, uint64_t size, uint64_t originalSize)
 {
 	uint64_t threadId = (blockIdx.x * blockDim.x) + threadIdx.x;
 	uint64_t step = size / 2;
@@ -62,14 +62,14 @@ int main()
 {
 
 	cudaError_t cudaStatus;
-	int* Data = 0;
+	static int* Data = 0;
 	int* dev_array = 0;
 
 	// Declare range of random numbers
 	const int range = 10;
-	;
+
 	//Declare problem size
-	const uint64_t size = pow(2,31);
+	const uint64_t size = pow(2, 30);
 
 	printf("Data Prep Took ");
 	{
@@ -77,8 +77,9 @@ int main()
 		// Allocate memory on host device
 		//Data = (int*)std::malloc(size * sizeof(int));
 		cudaMallocHost((int**)&Data, size * sizeof(int));
+		printf("Allocating %llu bytes of memory\n", size * sizeof(int));
 		// randomly fill array
-		for (int i = 0; i <= size; i++)
+		for (uint64_t i = 0; i < size; i++)
 		{
 			Data[i] = rand() % range;
 		}
@@ -105,69 +106,73 @@ int main()
 			cudaFree(dev_array);
 			return cudaStatus;
 		}
-	}
 
-	// Get Device info
-	cudaDeviceProp prop;
-	cudaGetDeviceProperties(&prop, 0);
-	std::printf("Device Number: %d\n", 0);
-	printf("  Device name: %s\n", prop.name);
-	printf("  Memory Clock Rate (KHz): %d\n",
-		prop.memoryClockRate);
-	printf("  Memory Bus Width (bits): %d\n",
-		prop.memoryBusWidth);
-	printf("  Peak Memory Bandwidth (GB/s): %f\n",
-		2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1.0e6);
-	int maxThreads = prop.maxThreadsPerBlock;
-	int maxBlocks = ((size / 2) + maxThreads - 1) / maxThreads;
-	if (maxThreads > size / 2)
-	{
-		maxBlocks = 1;
-		maxThreads = size / 2;
-	}
-	printf("  Max Threads per block: %d\n  Max Blocks: %d\n", maxThreads, maxBlocks);
-
-	dim3 threads(maxThreads, 1);
-	dim3 blocks(maxBlocks, 1);
-	printf("Runtime took ");
-	{
-		Timer T;
-		for (int i = 2; i <= size; i *= 2)
+		// Get Device info
+		cudaDeviceProp prop;
+		cudaGetDeviceProperties(&prop, 0);
+		std::printf("Device Number: %d\n", 0);
+		printf("  Device name: %s\n", prop.name);
+		printf("  Memory Clock Rate (KHz): %d\n",
+			prop.memoryClockRate);
+		printf("  Memory Bus Width (bits): %d\n",
+			prop.memoryBusWidth);
+		printf("  Peak Memory Bandwidth (GB/s): %f\n",
+			2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1.0e6);
+		int maxThreads = prop.maxThreadsPerBlock;
+		int maxBlocks = ((size / 2) + maxThreads - 1) / maxThreads;
+		if (maxThreads > size / 2)
 		{
-			//printf("next iter\n");
-			int j = i;
-			while(j != 1)
-			{
-				//printf("size: %d \n", j);
-				SortKernel << <blocks, threads >> > (dev_array, j,i);
-				// Check for any errors launching the kernel
-				cudaStatus = cudaGetLastError();
-				if (cudaStatus != cudaSuccess) {
-					fprintf(stderr, "SortKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-					cudaFree(dev_array);
-					return cudaStatus;
-				}
-				j = j / 2;
-			}
+			maxBlocks = 1;
+			maxThreads = size / 2;
 		}
-	}
-	printf("Processing Completed\n");
-	// cudaDeviceSynchronize waits for the kernel to finish, and returns
-	// any errors encountered during the launch.
-	cudaStatus = cudaDeviceSynchronize();
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching SortKernel!\n", cudaStatus);
-		cudaFree(dev_array);
-		return cudaStatus;
-	}
-	printf("Sync Completed\n");
-	// Copy output vector from GPU buffer to host memory.
-	cudaStatus = cudaMemcpy(Data, dev_array, size * sizeof(int), cudaMemcpyDeviceToHost);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaMemcpy failed!");
-		cudaFree(dev_array);
-		return cudaStatus;
-	}
+		printf("  Max Threads per block: %d\n  Max Blocks: %d\n", maxThreads, maxBlocks);
+
+		dim3 threads(maxThreads, 1);
+		dim3 blocks(maxBlocks, 1);
+
+		{
+			Timer T;
+			for (uint64_t i = 2; i <= size; i *= 2)
+			{
+				//printf("next iter\n");
+				uint64_t j = i;
+				while (j != 1)
+				{
+					//printf("size: %d \n", j);
+					SortKernel << <blocks, threads >> > (dev_array, j, i);
+					// Check for any errors launching the kernel
+					cudaStatus = cudaGetLastError();
+					if (cudaStatus != cudaSuccess) {
+						fprintf(stderr, "SortKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+						cudaFree(dev_array);
+						return cudaStatus;
+					}
+					j = j / 2;
+				}
+			}
+			printf("Runtime took ");
+		}
+		printf("Processing Completed\n");
+		// cudaDeviceSynchronize waits for the kernel to finish, and returns
+		// any errors encountered during the launch.
+		cudaStatus = cudaDeviceSynchronize();
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching SortKernel!\n", cudaStatus);
+			cudaFree(dev_array);
+			return cudaStatus;
+		}
+		printf("Sync Completed\n");
+		// Copy output vector from GPU buffer to host memory.
+		cudaStatus = cudaMemcpy(Data, dev_array, size * sizeof(int), cudaMemcpyDeviceToHost);
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaMemcpy failed!");
+			cudaFree(dev_array);
+			return cudaStatus;
+		}
+	
+		printf("Execution took ");
+	}	
+
 	printf("Transfer Completed\n");
 	printf("confirming solition\n");
 	int prev = 0;

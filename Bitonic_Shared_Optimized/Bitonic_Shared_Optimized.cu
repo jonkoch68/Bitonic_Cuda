@@ -10,6 +10,7 @@
 #include <iostream>
 #include <algorithm>
 
+// Timer class for statistics
 class Timer {
 public:
 	std::chrono::system_clock::time_point Begin;
@@ -25,6 +26,7 @@ public:
 	}
 };
 
+// Global Data pointer
 static int* Data = 0;
 
 __device__ void cudaSwap(int* a, int* b)
@@ -74,81 +76,69 @@ __global__ void SortKernelShared(int* array, uint64_t size, uint64_t originalSiz
 	int localIdx = threadIdx.x;
 	uint64_t globalIdx = GlobalThreadId;
 	int i = 0;
-	do
-	{
-		// Get Indexes
-		int startIdx = ((localIdx / step) * size) + (localIdx % step);
-		uint64_t GlobalStartIdx = ((globalIdx / step) * size) + (globalIdx % step);
-		//Put global data into shared memory
-		sharedArr[startIdx] = array[GlobalStartIdx];
-		sharedArr[startIdx + step] = array[GlobalStartIdx + step];
-		//Increment by number of threads
-		localIdx += numThreads;
-		globalIdx += numThreads;
-		//Increment i by range
-		i++;
-	} while (i < range);
+	int endIdx, startIdx;
+
+	// Load Data from Global -> Shared (L1 Cache)
+	startIdx = ((localIdx / step) * size) + (localIdx % step);
+	uint64_t GlobalStartIdx = ((globalIdx / step) * size) + (globalIdx % step);
+	//Put global data into shared memory
+	sharedArr[startIdx] = array[GlobalStartIdx];
+	sharedArr[startIdx + step] = array[GlobalStartIdx + step];
+	//Increment by number of threads
+	localIdx += numThreads;
+	globalIdx += numThreads;
+	//Increment i by range
+	i++;
 
 	__syncthreads(); //Wait for all threads to finish loading from global memory
 
 	//Begin operation 
 	int stageSize = size;
 	int stageStep = stageSize/2;
-	int endIdx, startIdx;
+	
 	localIdx = threadIdx.x;
-	int adjustedRange = range;
 	while (stageSize != 1)
 	{
-		i = 0;
-		do
-		{
-			startIdx = ((localIdx / stageStep) * stageSize) + (localIdx % stageStep);
-			endIdx = startIdx + stageStep;
-			if (endIdx >= 8192) break;
-			if (direction) //If swapping upwards
-			{
-				if (sharedArr[startIdx] < sharedArr[endIdx])
-				{
-					cudaSwap(&sharedArr[startIdx], &sharedArr[endIdx]);
-				}
-			}
-			else
-			{
-				if (sharedArr[startIdx] > sharedArr[endIdx])
-				{
-					cudaSwap(&sharedArr[startIdx], &sharedArr[endIdx]);
-				}
 
+		startIdx = ((localIdx / stageStep) * stageSize) + (localIdx % stageStep);
+		endIdx = startIdx + stageStep;
+		if (endIdx >= 8192) break;
+		if (direction) //If swapping upwards
+		{
+			if (sharedArr[startIdx] < sharedArr[endIdx])
+			{
+				cudaSwap(&sharedArr[startIdx], &sharedArr[endIdx]);
 			}
-			localIdx += numThreads;
-			i++;
-		} while (i < adjustedRange);
+		}
+		else
+		{
+			if (sharedArr[startIdx] > sharedArr[endIdx])
+			{
+				cudaSwap(&sharedArr[startIdx], &sharedArr[endIdx]);
+			}
+
+		}
+
+		//Adjust Size and step after iteration
+		stageSize = stageStep;
+		stageStep = stageSize / 2;
+		localIdx = threadIdx.x;
 
 		//Wait for all threads to finished before continuing to the next level
 		__syncthreads();
-		stageSize = stageStep;
-		stageStep = stageSize / 2;
-		//adjustedRange *= 2;
-		localIdx = threadIdx.x;
 	}
 
 	localIdx = threadIdx.x;
 	globalIdx = GlobalThreadId;
-	i = 0;
-	do
-	{
-		// Get Indexes
-		startIdx = ((localIdx / step) * size) + (localIdx % step);
-		uint64_t GlobalStartIdx = ((globalIdx / step) * size) + (globalIdx % step);
-		//Put global data into shared memory
-		array[GlobalStartIdx] = sharedArr[startIdx];
-		array[GlobalStartIdx + step] = sharedArr[startIdx + step];
-		//Increment by number of threads
-		localIdx += numThreads;
-		globalIdx += numThreads;
-		//Increment i by range
-		i++;
-	} while (i < range);
+	// Get Indexes
+	startIdx = ((localIdx / step) * size) + (localIdx % step);
+	GlobalStartIdx = ((globalIdx / step) * size) + (globalIdx % step);
+	//Put global data into shared memory
+	array[GlobalStartIdx] = sharedArr[startIdx];
+	array[GlobalStartIdx + step] = sharedArr[startIdx + step];
+	//Increment by number of threads
+	localIdx += numThreads;
+	globalIdx += numThreads;
 
 	__syncthreads();
 }
@@ -185,15 +175,16 @@ void SharedBitonic(int* aData, uint64_t aSize)
 	cudaGetDeviceProperties(&prop, 0);
 	std::printf("Device Number: %d\n", 0);
 	printf("  Device name: %s\n", prop.name);
-	printf("  Memory Clock Rate (KHz): %d\n",
-		prop.memoryClockRate);
-	printf("  Memory Bus Width (bits): %d\n",
-		prop.memoryBusWidth);
+	printf("  Memory Clock Rate (KHz): %d\n", prop.memoryClockRate);
+	printf("  Memory Bus Width (bits): %d\n", prop.memoryBusWidth);
 	printf("  Peak Memory Bandwidth (GB/s): %f\n",
 		2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1.0e6);
-	printf("Shared Memory per Multiprocessor %d\n", prop.sharedMemPerMultiprocessor);
+	printf("  Shared Memory per Multiprocessor %d\n", prop.sharedMemPerMultiprocessor);
+
+	// Declare Blocks and Threads for problem
 	int maxThreads = prop.maxThreadsPerBlock;
 	int maxBlocks = ((aSize / 2) + maxThreads - 1) / maxThreads;
+
 	if (maxThreads > aSize / 2)
 	{
 		maxBlocks = 1;
@@ -203,7 +194,7 @@ void SharedBitonic(int* aData, uint64_t aSize)
 
 	dim3 threads(maxThreads, 1);
 	dim3 blocks(maxBlocks, 1);
-	cudaFuncSetCacheConfig(SortKernelShared, cudaFuncCachePreferL1);
+
 	{
 		Timer T;
 		for (uint64_t i = 2; i <= aSize; i *= 2)
@@ -212,9 +203,7 @@ void SharedBitonic(int* aData, uint64_t aSize)
 			uint64_t j = i;
 			while (j != 1)
 			{
-				// 48Kb of shared memory / 12,000 int32 values stored. 
-				// 8,192 entries shared to without going over 48k in shared memory
-				// 4,096 
+				// Area where 2048 entries can be placed into shared memory 
 				if (j <= std::pow(2, 11)) 
 				{
 
@@ -226,9 +215,8 @@ void SharedBitonic(int* aData, uint64_t aSize)
 					}
 					break;
 				}
-				else
+				else // When problem size is greater than 2048
 				{
-					//printf("size: %d \n", j);
 					SortKernel << <blocks, threads >> > (dev_array, j, i);
 					// Check for any errors launching the kernel
 					cudaStatus = cudaGetLastError();
@@ -269,12 +257,11 @@ int main()
 {
 	printf("Running Shared Optimized\n");
 
-
 	// Declare range of random numbers
 	const int range = 10;
 
 	//Declare problem size
-	const uint64_t size = pow(2, 16);
+	const uint64_t size = pow(2, 30);
 	printf("Sorting %llu values\n", size);
 	// Allocate memory on host device
 	Data = (int*)std::malloc(size * sizeof(int));
@@ -285,14 +272,14 @@ int main()
 		Data[i] = rand() % range;
 	}
 
-	{
+	{ // Area where execution of GPU code will begin
 		Timer T;
 		SharedBitonic(Data, size);
 		printf("Execution time: ");
 	}
 
-	printf("Transfer Completed\n");
-	printf("confirming solition\n");
+	printf("Transfer Completed\n\n");
+	printf("confirming solition...\n");
 	int prev = 0;
 	bool passed = true;
 	for (uint64_t i = 0; i < size; i++)
@@ -308,6 +295,7 @@ int main()
 	if (passed) printf("All %llu number correctly sorted\n", size);
 	else printf("Failed, incorrect sorting value\n");
 	
+	/*
 	printf("Printing results\n");
 	std::ofstream out1("Output1.txt");
 	prev = 0;
@@ -317,5 +305,5 @@ int main()
 		if (Data[i] < prev ) out1 << "\n\n\n";
 		prev = Data[i];
 	}
-	
+	*/
 }
