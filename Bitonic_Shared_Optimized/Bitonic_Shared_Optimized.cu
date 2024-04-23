@@ -68,9 +68,7 @@ __global__ void SortKernelShared(int* array, uint64_t size, uint64_t originalSiz
 
 	// false is down, true is up
 	bool direction = ((GlobalThreadId / (originalSize / 2)) % 2) == 0 ? false : true;
-	//Range of numbers each thread will be responsible for adding 
-	uint64_t range = (size/2)  / numThreads;
-	__shared__ int sharedArr[2048]; // 32,768 Bytes. Cannot exceed this without going over 48k
+	__shared__ int sharedArr[2048]; //  Cannot exceed this without going over 48k
 
 	//Load memory into shared L1 cache from global
 	int localIdx = threadIdx.x;
@@ -197,17 +195,17 @@ void SharedBitonic(int* aData, uint64_t aSize)
 
 	{
 		Timer T;
-		for (uint64_t i = 2; i <= aSize; i *= 2)
+		for (uint64_t stageSize = 2; stageSize <= aSize; stageSize *= 2)
 		{
 			//printf("next iter\n");
-			uint64_t j = i;
-			while (j != 1)
+			uint64_t stepSize = stageSize;
+			while (stepSize != 1)
 			{
 				// Area where 2048 entries can be placed into shared memory 
-				if (j <= std::pow(2, 11)) 
+				if (stepSize <= std::pow(2, 11))
 				{
 
-					SortKernelShared << <blocks, threads >> > (dev_array, j, i, maxThreads);
+					SortKernelShared << <blocks, threads >> > (dev_array, stepSize, stageSize, maxThreads);
 					if (cudaStatus != cudaSuccess) {
 						fprintf(stderr, "SortKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
 						cudaFree(dev_array);
@@ -217,7 +215,7 @@ void SharedBitonic(int* aData, uint64_t aSize)
 				}
 				else // When problem size is greater than 2048
 				{
-					SortKernel << <blocks, threads >> > (dev_array, j, i);
+					SortKernel << <blocks, threads >> > (dev_array, stepSize, stageSize);
 					// Check for any errors launching the kernel
 					cudaStatus = cudaGetLastError();
 					if (cudaStatus != cudaSuccess) {
@@ -226,7 +224,7 @@ void SharedBitonic(int* aData, uint64_t aSize)
 						return;
 					}
 				}
-				j = j / 2;
+				stepSize = stepSize / 2;
 			}
 			// REMEMBER TO REMOVE
 			cudaStatus = cudaMemcpy(aData, dev_array, aSize * sizeof(int), cudaMemcpyDeviceToHost);
@@ -264,7 +262,8 @@ int main()
 	const uint64_t size = pow(2, 30);
 	printf("Sorting %llu values\n", size);
 	// Allocate memory on host device
-	Data = (int*)std::malloc(size * sizeof(int));
+	//Data = (int*)std::malloc(size * sizeof(int));
+	cudaMallocHost((int**)&Data, size * sizeof(int));
 	printf("Allocating %llu bytes of memory\n", size * sizeof(int));
 	// randomly fill array
 	for (uint64_t i = 0; i < size; i++)

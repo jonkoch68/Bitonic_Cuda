@@ -132,14 +132,14 @@ int main()
 
 		{
 			Timer T;
-			for (uint64_t i = 2; i <= size; i *= 2)
+			for (uint64_t stageSize = 2; stageSize <= size; stageSize *= 2)
 			{
 				//printf("next iter\n");
-				uint64_t j = i;
-				while (j != 1)
+				uint64_t stepSize = stageSize;
+				while (stepSize != 1)
 				{
 					//printf("size: %d \n", j);
-					SortKernel << <blocks, threads >> > (dev_array, j, i);
+					SortKernel << <blocks, threads >> > (dev_array, stepSize, stageSize);
 					// Check for any errors launching the kernel
 					cudaStatus = cudaGetLastError();
 					if (cudaStatus != cudaSuccess) {
@@ -147,7 +147,7 @@ int main()
 						cudaFree(dev_array);
 						return cudaStatus;
 					}
-					j = j / 2;
+					stepSize /= 2;
 				}
 			}
 			printf("Runtime took ");
